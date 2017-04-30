@@ -629,6 +629,309 @@ def adam(loss_or_grads, params, learning_rate=0.001, beta1=0.9,
     return updates
 
 
+
+    
+##this function added by gaurav on 4/17/17    
+def adam_new(loss_or_grads, params, lql2, target_bits, learning_rate=0.001, beta1=0.9,
+         beta2=0.999, epsilon=1e-8):
+    """Adam updates
+
+    Adam updates implemented as in [1]_.
+
+    Parameters
+    ----------
+    loss_or_grads : symbolic expression or list of expressions
+        A scalar loss expression, or a list of gradient expressions
+    params : list of shared variables
+        The variables to generate update expressions for
+    learning_rate : float or symbolic scalar
+        Learning rate
+    beta1 : float or symbolic scalar
+        Exponential decay rate for the first moment estimates.
+    beta2 : float or symbolic scalar
+        Exponential decay rate for the second moment estimates.
+    epsilon : float or symbolic scalar
+        Constant for numerical stability.
+
+    Returns
+    -------
+    OrderedDict
+        A dictionary mapping each parameter to its update expression
+
+    Notes
+    -----
+    The paper [1]_ includes an additional hyperparameter lambda. This is only
+    needed to prove convergence of the algorithm and has no practical use
+    (personal communication with the authors), it is therefore omitted here.
+
+    References
+    ----------
+    .. [1] Kingma, Diederik, and Jimmy Ba (2014):
+           Adam: A Method for Stochastic Optimization.
+           arXiv preprint arXiv:1412.6980.
+    """
+    all_grads = get_or_compute_grads(loss_or_grads, params)
+    #import pdb;pdb.set_trace()
+    if target_bits>1:
+        base = 2**(target_bits-1)
+        print base
+        i=0
+        for param, gparam in zip(params, all_grads): # note gparams are not shared variable
+            if param.name == 'W':
+                all_grads[i] += lql2*((T.round(param * base - 0.5)/base + 0.5/base) - param)
+            i += 1
+        
+    t_prev = theano.shared(utils.floatX(0.))
+    updates = OrderedDict()
+
+    # Using theano constant to prevent upcasting of float32
+    one = T.constant(1)
+
+    t = t_prev + 1
+    a_t = learning_rate*T.sqrt(one-beta2**t)/(one-beta1**t)
+
+    for param, g_t in zip(params, all_grads):
+        value = param.get_value(borrow=True)
+        m_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+
+        m_t = beta1*m_prev + (one-beta1)*g_t
+        v_t = beta2*v_prev + (one-beta2)*g_t**2
+        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
+
+        updates[m_prev] = m_t
+        updates[v_prev] = v_t
+        updates[param] = param - step
+
+    updates[t_prev] = t
+    return updates    
+
+
+def adam_fshr(loss_or_grads, params, fshr , target_bits, learning_rate=0.001, beta1=0.9,
+         beta2=0.999, epsilon=1e-8):
+    """Adam updates
+
+    Adam updates implemented as in [1]_.
+
+    Parameters
+    ----------
+    loss_or_grads : symbolic expression or list of expressions
+        A scalar loss expression, or a list of gradient expressions
+    params : list of shared variables
+        The variables to generate update expressions for
+    learning_rate : float or symbolic scalar
+        Learning rate
+    beta1 : float or symbolic scalar
+        Exponential decay rate for the first moment estimates.
+    beta2 : float or symbolic scalar
+        Exponential decay rate for the second moment estimates.
+    epsilon : float or symbolic scalar
+        Constant for numerical stability.
+
+    Returns
+    -------
+    OrderedDict
+        A dictionary mapping each parameter to its update expression
+
+    Notes
+    -----
+    The paper [1]_ includes an additional hyperparameter lambda. This is only
+    needed to prove convergence of the algorithm and has no practical use
+    (personal communication with the authors), it is therefore omitted here.
+
+    References
+    ----------
+    .. [1] Kingma, Diederik, and Jimmy Ba (2014):
+           Adam: A Method for Stochastic Optimization.
+           arXiv preprint arXiv:1412.6980.
+    """
+    all_grads = get_or_compute_grads(loss_or_grads, params)
+    t_prev = theano.shared(utils.floatX(0.))
+    updates = OrderedDict()
+
+    # Using theano constant to prevent upcasting of float32
+    one = T.constant(1)
+
+    t = t_prev + 1
+    a_t = learning_rate*T.sqrt(one-beta2**t)/(one-beta1**t)
+    wb = 0
+    
+    # params = lasagne.layers.get_all_params(cnn)     
+    # fshr = []
+    # for param in params:
+        # if param.name == 'f':
+            # fshr.append(param)
+    i =0
+    for param, g_t in zip(params, all_grads):
+        value = param.get_value(borrow=True)
+        m_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev_hat = theano.shared(np.zeros(value.shape, dtype= value.dtype),
+                                broadcastable=param.broadcastable)
+        m_t = beta1*m_prev + (one-beta1)*g_t
+        v_t = beta2*v_prev + (one-beta2)*g_t**2
+        v_t_hat = v_t/(one-beta2**t)
+        step = a_t*m_t/(T.sqrt(v_t) + epsilon)
+
+        updates[m_prev] = m_t
+        updates[v_prev] = v_t
+        updates[v_prev_hat] = v_t_hat
+        
+        # if param.name == "W":
+            # if target_bits==1:
+                # tt = param
+                # index_less = np.where(tt<=0)
+                # index_more = np.where(tt>0)
+                # theano.tensor.set_subtensor(tt[index_less],-1.)
+                # theano.tensor.set_subtensor(tt[index_more], 1.)
+                # wb_t = tt
+                # #wb_t = binary_ops.SignNumpy(param.get_value())
+            # else:
+                # quantized_array_temp = param*(2**(target_bits-1))
+                # quantized_array_temp = np.around(quantized_array_temp, decimals=0)
+                # quantized_array_temp/=(2**(target_bits-1))
+                # wb_t = quantized_array_temp
+                
+        #import pdb;pdb.set_trace()
+        # if param.name == 'f':
+            # #import pdb;pdb.set_trace()
+            # updates[param] = v_t_hat
+        # # elif param.name == 'wb':
+            # update[wb] = wb_t
+        if param.name == 'W':
+            updates[fshr[i]] = v_t_hat
+            i=i+1
+        updates[param] = param - step
+
+    updates[t_prev] = t
+    return updates
+
+
+def adam_fshr_diff(loss_or_grads, params, fshr , target_bits, learning_rate=0.001, divergence_loss = 0., beta1=0.9,
+         beta2=0.999, epsilon=1e-8):
+    """Adam updates
+
+    Adam updates implemented as in [1]_.
+
+    Parameters
+    ----------
+    loss_or_grads : symbolic expression or list of expressions
+        A scalar loss expression, or a list of gradient expressions
+    params : list of shared variables
+        The variables to generate update expressions for
+    learning_rate : float or symbolic scalar
+        Learning rate
+    beta1 : float or symbolic scalar
+        Exponential decay rate for the first moment estimates.
+    beta2 : float or symbolic scalar
+        Exponential decay rate for the second moment estimates.
+    epsilon : float or symbolic scalar
+        Constant for numerical stability.
+
+    Returns
+    -------
+    OrderedDict
+        A dictionary mapping each parameter to its update expression
+
+    Notes
+    -----
+    The paper [1]_ includes an additional hyperparameter lambda. This is only
+    needed to prove convergence of the algorithm and has no practical use
+    (personal communication with the authors), it is therefore omitted here.
+
+    References
+    ----------
+    .. [1] Kingma, Diederik, and Jimmy Ba (2014):
+           Adam: A Method for Stochastic Optimization.
+           arXiv preprint arXiv:1412.6980.
+    """
+    ###########this loss is for getting fisher info
+    all_grads = get_or_compute_grads(loss_or_grads, params)
+    t_prev = theano.shared(utils.floatX(0.))
+    updates = OrderedDict()
+
+    # Using theano constant to prevent upcasting of float32
+    one = T.constant(1)
+
+    t = t_prev + 1
+    #a_t = learning_rate*T.sqrt(one-beta2**t)/(one-beta1**t)
+    
+    
+    i =0
+    for param, g_t in zip(params, all_grads):
+        value = param.get_value(borrow=True)
+        m_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev = theano.shared(np.zeros(value.shape, dtype=value.dtype),
+                               broadcastable=param.broadcastable)
+        v_prev_hat = theano.shared(np.zeros(value.shape, dtype= value.dtype),
+                                broadcastable=param.broadcastable)
+        m_t = beta1*m_prev + (one-beta1)*g_t
+        v_t = beta2*v_prev + (one-beta2)*g_t**2
+        v_t_hat = v_t/(one-beta2**t)
+        #step = a_t*m_t/(T.sqrt(v_t) + epsilon)
+
+        updates[m_prev] = m_t
+        updates[v_prev] = v_t
+        updates[v_prev_hat] = v_t_hat
+        
+        
+        if param.name == 'W':
+            updates[fshr[i]] = v_t_hat
+            i=i+1
+        #updates[param] = param - step
+
+    updates[t_prev] = t
+    
+    ##############this loss for updating the weights
+    loss1 = loss_or_grads + divergence_loss
+    all_grads1 = get_or_compute_grads(loss1, params)
+    t_prev1 = theano.shared(utils.floatX(0.))
+    #updates = OrderedDict()
+
+    # Using theano constant to prevent upcasting of float32
+    one = T.constant(1)
+    
+    t1 = t_prev1 + 1
+
+    a_t1 = learning_rate*T.sqrt(one-beta2**t)/(one-beta1**t)
+    
+    
+    i =0
+    for param1, g_t1 in zip(params, all_grads1):
+        value1 = param1.get_value(borrow=True)
+        m_prev1 = theano.shared(np.zeros(value1.shape, dtype=value.dtype),
+                               broadcastable=param1.broadcastable)
+        v_prev1 = theano.shared(np.zeros(value1.shape, dtype=value.dtype),
+                               broadcastable=param1.broadcastable)
+        v_prev_hat1 = theano.shared(np.zeros(value1.shape, dtype= value.dtype),
+                                broadcastable=param1.broadcastable)
+        m_t1 = beta1*m_prev1 + (one-beta1)*g_t1
+        v_t1 = beta2*v_prev1 + (one-beta2)*g_t1**2
+        v_t_hat1 = v_t1/(one-beta2**t1)
+        step1 = a_t1*m_t1/(T.sqrt(v_t1) + epsilon)
+
+        updates[m_prev1] = m_t1
+        updates[v_prev1] = v_t1
+        updates[v_prev_hat1] = v_t_hat1
+        
+                
+        
+        # if param.name == 'W':
+            # updates[fshr[i]] = v_t_hat
+            # i=i+1
+        updates[param1] = param1 - step1
+
+    updates[t_prev1] = t1
+    
+    
+    return updates
+
+    
 def adamax(loss_or_grads, params, learning_rate=0.002, beta1=0.9,
            beta2=0.999, epsilon=1e-8):
     """Adamax updates
@@ -837,3 +1140,4 @@ def total_norm_constraint(tensor_vars, max_norm, epsilon=1e-7,
         return tensor_vars_scaled, norm
     else:
         return tensor_vars_scaled
+
